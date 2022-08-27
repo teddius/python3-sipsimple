@@ -1,4 +1,3 @@
-
 """
 Implements a SIP Account management system that allows the definition of
 multiple SIP accounts and their properties.
@@ -18,17 +17,21 @@ from eventlib import coros, proc
 from gnutls.crypto import X509Certificate, X509PrivateKey
 from gnutls.errors import GNUTLSError
 from gnutls.interfaces.twisted import X509Credentials
+from ondewo.logging.logger import logger_console as logger
 from zope.interface import implementer
 
 from sipsimple.account.bonjour import BonjourServices, _bonjour
 from sipsimple.account.publication import PresencePublisher, DialogPublisher
 from sipsimple.account.registration import Registrar
-from sipsimple.account.subscription import MWISubscriber, PresenceWinfoSubscriber, DialogWinfoSubscriber, PresenceSubscriber, SelfPresenceSubscriber, DialogSubscriber
+from sipsimple.account.subscription import MWISubscriber, PresenceWinfoSubscriber, DialogWinfoSubscriber, \
+    PresenceSubscriber, SelfPresenceSubscriber, DialogSubscriber
 from sipsimple.account.xcap import XCAPManager
-from sipsimple.core import Credentials, SIPURI, ContactURIFactory
 from sipsimple.configuration import ConfigurationManager, Setting, SettingsGroup, SettingsObject, SettingsObjectID
-from sipsimple.configuration.datatypes import AudioCodecList, MSRPConnectionModel, MSRPRelayAddress, MSRPTransport, NonNegativeInteger, Path, SIPAddress, SIPProxyAddress, SRTPKeyNegotiation, SIPTransport, STUNServerAddressList, VideoCodecList, XCAPRoot
+from sipsimple.configuration.datatypes import AudioCodecList, MSRPConnectionModel, MSRPRelayAddress, MSRPTransport, \
+    NonNegativeInteger, SIPAddress, SIPProxyAddress, SRTPKeyNegotiation, SIPTransport, STUNServerAddressList, \
+    VideoCodecList, XCAPRoot
 from sipsimple.configuration.settings import SIPSimpleSettings
+from sipsimple.core import Credentials, SIPURI, ContactURIFactory
 from sipsimple.payloads import ParserError
 from sipsimple.payloads.messagesummary import MessageSummary
 from sipsimple.payloads.pidf import PIDFDocument
@@ -37,7 +40,6 @@ from sipsimple.payloads.watcherinfo import WatcherInfoDocument
 from sipsimple.threading import call_in_thread
 from sipsimple.threading.green import call_in_green_thread, run_in_green_thread
 from sipsimple.util import user_info, execute_once
-
 
 
 class AuthSettings(SettingsGroup):
@@ -140,14 +142,15 @@ class Account(SettingsObject):
     msrp = MSRPSettings
     presence = PresenceSettings
     xcap = XCAPSettings
+    port = Setting(type=int, default=5060)
 
-    def __new__(cls, id):
-        #with AccountManager.load.lock:
+    def __new__(cls, id, password: str = "", port: int = 5060):
+        # with AccountManager.load.lock:
         #    if not AccountManager.load.called:
         #        raise RuntimeError("cannot instantiate %s before calling AccountManager.load" % cls.__name__)
         return SettingsObject.__new__(cls, id)
 
-    def __init__(self, id):
+    def __init__(self, id: str, password: str = "", port: int = 5060):
         self.contact = ContactURIFactory()
         self.xcap_manager = XCAPManager(self)
         self._started = False
@@ -170,6 +173,8 @@ class Account(SettingsObject):
         self._dialog_version = None
         self.trusted_cas = []
         self.ca_list = None
+        self.port: int = port
+        self.password: str = password
 
     def start(self):
         if self._started or self._deleted:
@@ -180,7 +185,8 @@ class Account(SettingsObject):
         notification_center.post_notification('SIPAccountWillStart', sender=self)
         notification_center.add_observer(self, name='CFGSettingsObjectDidChange', sender=self)
         notification_center.add_observer(self, name='CFGSettingsObjectDidChange', sender=SIPSimpleSettings())
-        notification_center.add_observer(self, name='XCAPManagerDidDiscoverServerCapabilities', sender=self.xcap_manager)
+        notification_center.add_observer(self, name='XCAPManagerDidDiscoverServerCapabilities',
+                                         sender=self.xcap_manager)
         notification_center.add_observer(self, sender=self._mwi_subscriber)
         notification_center.add_observer(self, sender=self._pwi_subscriber)
         notification_center.add_observer(self, sender=self._dwi_subscriber)
@@ -203,7 +209,8 @@ class Account(SettingsObject):
         notification_center.post_notification('SIPAccountWillStop', sender=self)
         notification_center.remove_observer(self, name='CFGSettingsObjectDidChange', sender=self)
         notification_center.remove_observer(self, name='CFGSettingsObjectDidChange', sender=SIPSimpleSettings())
-        notification_center.remove_observer(self, name='XCAPManagerDidDiscoverServerCapabilities', sender=self.xcap_manager)
+        notification_center.remove_observer(self, name='XCAPManagerDidDiscoverServerCapabilities',
+                                            sender=self.xcap_manager)
         notification_center.remove_observer(self, sender=self._mwi_subscriber)
         notification_center.remove_observer(self, sender=self._pwi_subscriber)
         notification_center.remove_observer(self, sender=self._dwi_subscriber)
@@ -270,7 +277,7 @@ class Account(SettingsObject):
         # however this is not a time consuming operation (~ 3000 req/sec). -Luci
 
         settings = SIPSimpleSettings()
-        tls_certificate  = settings.tls.certificate
+        tls_certificate = settings.tls.certificate
 
         certificate = None
         private_key = None
@@ -282,9 +289,9 @@ class Account(SettingsObject):
                 private_key = X509PrivateKey(certificate_data)
             except (FileNotFoundError, GNUTLSError, UnicodeDecodeError):
                 pass
-                
+
         trusted_cas = []
-        ca_list  = settings.tls.ca_list
+        ca_list = settings.tls.ca_list
 
         if ca_list is not None:
             if len(self.trusted_cas) > 0:
@@ -296,22 +303,22 @@ class Account(SettingsObject):
                     ca_text = open(ca_list.normalized).read()
                 except (FileNotFoundError, GNUTLSError, UnicodeDecodeError):
                     ca_text = ''
-            
+
                 for line in ca_text.split("\n"):
-                   if "BEGIN CERT" in line:
-                      start = True
-                      crt = line + "\n"
-                   elif "END CERT" in line:
-                      crt = crt + line + "\n"
-                      end = True
-                      start = False
-                      try:
-                          trusted_cas.append(X509Certificate(crt))
-                      except (GNUTLSError, ValueError) as e:
-                          continue
-      
-                   elif start:
-                      crt = crt + line + "\n"
+                    if "BEGIN CERT" in line:
+                        start = True
+                        crt = line + "\n"
+                    elif "END CERT" in line:
+                        crt = crt + line + "\n"
+                        end = True
+                        start = False
+                        try:
+                            trusted_cas.append(X509Certificate(crt))
+                        except (GNUTLSError, ValueError) as e:
+                            continue
+
+                    elif start:
+                        crt = crt + line + "\n"
 
                 self.trusted_cas = trusted_cas
                 self.ca_list = ca_list
@@ -322,7 +329,7 @@ class Account(SettingsObject):
 
     @property
     def uri(self):
-        return SIPURI(user=self.id.username, host=self.id.domain)
+        return SIPURI(user=self.id.username, host=self.id.domain, port=self.port)
 
     @property
     def voicemail_uri(self):
@@ -385,8 +392,10 @@ class Account(SettingsObject):
             except ParserError:
                 pass
             else:
-                self._mwi_voicemail_uri = message_summary.message_account and SIPAddress(message_summary.message_account.replace('sip:', '', 1)) or None
-                notification.center.post_notification('SIPAccountGotMessageSummary', sender=self, data=NotificationData(message_summary=message_summary))
+                self._mwi_voicemail_uri = message_summary.message_account and SIPAddress(
+                    message_summary.message_account.replace('sip:', '', 1)) or None
+                notification.center.post_notification('SIPAccountGotMessageSummary', sender=self,
+                                                      data=NotificationData(message_summary=message_summary))
 
     def _NH_PresenceWinfoSubscriptionGotNotify(self, notification):
         body = notification.data.body.decode() if notification.data.body else None
@@ -407,7 +416,8 @@ class Account(SettingsObject):
                 elif watcher_info.state == 'partial' and watcher_info.version > self._pwi_version + 1:
                     self._pwi_subscriber.resubscribe()
                 self._pwi_version = watcher_info.version
-                data = NotificationData(version=watcher_info.version, state=watcher_info.state, watcher_list=watcher_list)
+                data = NotificationData(version=watcher_info.version, state=watcher_info.state,
+                                        watcher_list=watcher_list)
                 notification.center.post_notification('SIPAccountGotPresenceWinfo', sender=self, data=data)
 
     def _NH_PresenceWinfoSubscriptionDidEnd(self, notification):
@@ -435,7 +445,8 @@ class Account(SettingsObject):
                 elif watcher_info.state == 'partial' and watcher_info.version > self._dwi_version + 1:
                     self._dwi_subscriber.resubscribe()
                 self._dwi_version = watcher_info.version
-                data = NotificationData(version=watcher_info.version, state=watcher_info.state, watcher_list=watcher_list)
+                data = NotificationData(version=watcher_info.version, state=watcher_info.state,
+                                        watcher_list=watcher_list)
                 notification.center.post_notification('SIPAccountGotDialogWinfo', sender=self, data=data)
 
     def _NH_DialogWinfoSubscriptionDidEnd(self, notification):
@@ -448,7 +459,9 @@ class Account(SettingsObject):
         body = notification.data.body.decode() if notification.data.body else None
         if body and notification.data.content_type == RLSNotify.content_type:
             try:
-                rls_notify = RLSNotify.parse('{content_type}\r\n\r\n{body}'.format(content_type=notification.data.headers['Content-Type'], body=body))
+                rls_notify = RLSNotify.parse(
+                    '{content_type}\r\n\r\n{body}'.format(content_type=notification.data.headers['Content-Type'],
+                                                          body=body))
             except ParserError:
                 pass
             else:
@@ -462,7 +475,8 @@ class Account(SettingsObject):
                 elif not rls_notify.full_state and rls_notify.version > self._presence_version + 1:
                     self._presence_subscriber.resubscribe()
                 self._presence_version = rls_notify.version
-                data = NotificationData(version=rls_notify.version, full_state=rls_notify.full_state, resource_map=dict((str(resource.uri), resource) for resource in rls_notify))
+                data = NotificationData(version=rls_notify.version, full_state=rls_notify.full_state,
+                                        resource_map=dict((str(resource.uri), resource) for resource in rls_notify))
                 notification.center.post_notification('SIPAccountGotPresenceState', sender=self, data=data)
 
     def _NH_PresenceSubscriptionDidEnd(self, notification):
@@ -481,13 +495,16 @@ class Account(SettingsObject):
             else:
                 if pidf_doc.entity.partition('sip:')[2] != self.id:
                     return
-                notification.center.post_notification('SIPAccountGotSelfPresenceState', sender=self, data=NotificationData(pidf=pidf_doc))
+                notification.center.post_notification('SIPAccountGotSelfPresenceState', sender=self,
+                                                      data=NotificationData(pidf=pidf_doc))
 
     def _NH_DialogSubscriptionGotNotify(self, notification):
         body = notification.data.body.decode() if notification.data.body else None
         if body and notification.data.content_type == RLSNotify.content_type:
             try:
-                rls_notify = RLSNotify.parse('{content_type}\r\n\r\n{body}'.format(content_type=notification.data.headers['Content-Type'], body=body))
+                rls_notify = RLSNotify.parse(
+                    '{content_type}\r\n\r\n{body}'.format(content_type=notification.data.headers['Content-Type'],
+                                                          body=body))
             except ParserError:
                 pass
             else:
@@ -501,7 +518,8 @@ class Account(SettingsObject):
                 elif not rls_notify.full_state and rls_notify.version > self._dialog_version + 1:
                     self._dialog_subscriber.resubscribe()
                 self._dialog_version = rls_notify.version
-                data = NotificationData(version=rls_notify.version, full_state=rls_notify.full_state, resource_map=dict((resource.uri, resource) for resource in rls_notify))
+                data = NotificationData(version=rls_notify.version, full_state=rls_notify.full_state,
+                                        resource_map=dict((resource.uri, resource) for resource in rls_notify))
                 notification.center.post_notification('SIPAccountGotDialogState', sender=self, data=data)
 
     def _NH_DialogSubscriptionDidEnd(self, notification):
@@ -608,12 +626,11 @@ class BonjourAccount(SettingsObject):
     presence = PresenceSettings
     rtp = RTPSettings
     sip = BonjourSIPSettings
-    
 
     def __new__(cls):
-#        with AccountManager.load.lock:
-#            if not AccountManager.load.called:
-#                raise RuntimeError("cannot instantiate %s before calling AccountManager.load" % cls.__name__)
+        #        with AccountManager.load.lock:
+        #            if not AccountManager.load.called:
+        #                raise RuntimeError("cannot instantiate %s before calling AccountManager.load" % cls.__name__)
         return SettingsObject.__new__(cls)
 
     def __init__(self):
@@ -680,7 +697,7 @@ class BonjourAccount(SettingsObject):
         # This property can be optimized to cache the credentials it loads from disk,
         # however this is not a time consuming operation (~ 3000 req/sec). -Luci
         settings = SIPSimpleSettings()
-        tls_certificate  = settings.tls.certificate
+        tls_certificate = settings.tls.certificate
         if tls_certificate is not None:
             certificate_data = open(tls_certificate.normalized).read()
             certificate = X509Certificate(certificate_data)
@@ -778,9 +795,31 @@ class AccountManager(object, metaclass=Singleton):
         configuration = ConfigurationManager()
         bonjour_account = BonjourAccount()
         names = configuration.get_names([Account.__group__])
-        [Account(id) for id in names if id != bonjour_account.id]
+
+        for id in names:
+            if id != bonjour_account.id:
+                user: str = id[:id.index("@")]
+                domain: str = id[id.index("@") + 1:]
+                port: int = 5060
+                if ":" in domain:
+                    domain = id[id.index("@") + 1:id.index(":")]
+                    port = id[id.index(":") + 1:]
+                sip_id: str = user + "@" + domain
+                password: str = ""
+                try:
+                    password = configuration.data[Account.__group__][id]["auth"]["password"]
+                except KeyError:
+                    logger.warn("No password found in configuration file, hence creating account with empty password.")
+                try:
+                    port = configuration.data[Account.__group__][id]["port"]
+                except KeyError:
+                    port = 5060
+                    logger.warn("No port found in configuration file, hence creating account standard port 5060.")
+                Account(id, password=password, port=port)
+
         default_account = self.default_account
-        notification_center.post_notification('SIPAccountManagerDidLoad', sender=self, data=NotificationData(accounts=names, default_account=default_account))
+        notification_center.post_notification('SIPAccountManagerDidLoad', sender=self,
+                                              data=NotificationData(accounts=names, default_account=default_account))
         if default_account is None or not default_account.enabled:
             try:
                 self.default_account = next((account for account in list(self.accounts.values()) if account.enabled))
@@ -793,7 +832,9 @@ class AccountManager(object, metaclass=Singleton):
         set to activate.
         """
         notification_center = NotificationCenter()
-        notification_center.post_notification('SIPAccountManagerWillStart', sender=self, data=NotificationData(bonjour_available=_bonjour.available, accounts=list(a.id for a in self.accounts.values())))
+        notification_center.post_notification('SIPAccountManagerWillStart', sender=self,
+                                              data=NotificationData(bonjour_available=_bonjour.available, accounts=list(
+                                                  a.id for a in self.accounts.values())))
         proc.waitall([proc.spawn(account.start) for account in list(self.accounts.values())])
         notification_center.post_notification('SIPAccountManagerDidStart', sender=self)
 
@@ -822,10 +863,13 @@ class AccountManager(object, metaclass=Singleton):
 
     def find_account(self, contact_uri):
         # compare contact_address with account contact
-        exact_matches = (account for account in list(self.accounts.values()) if account.enabled and account.contact.username==contact_uri.user or (account.id.username==contact_uri.user and account.id.domain==contact_uri.host))
+        exact_matches = (account for account in list(self.accounts.values()) if
+                         account.enabled and account.contact.username == contact_uri.user or (
+                                 account.id.username == contact_uri.user and account.id.domain == contact_uri.host))
 
         # compare username in contact URI with account username
-        loose_matches = (account for account in list(self.accounts.values()) if account.enabled and account.id.username==contact_uri.user)
+        loose_matches = (account for account in list(self.accounts.values()) if
+                         account.enabled and account.id.username == contact_uri.user)
         return next(chain(exact_matches, loose_matches, [None]))
 
     def handle_notification(self, notification):
@@ -833,12 +877,14 @@ class AccountManager(object, metaclass=Singleton):
         handler(notification)
 
     def _NH_CFGSettingsObjectWasActivated(self, notification):
-        if isinstance(notification.sender, Account) or (isinstance(notification.sender, BonjourAccount) and _bonjour.available):
+        if isinstance(notification.sender, Account) or (
+                isinstance(notification.sender, BonjourAccount) and _bonjour.available):
             account = notification.sender
             self.accounts[account.id] = account
             notification.center.add_observer(self, sender=account, name='CFGSettingsObjectDidChange')
             notification.center.add_observer(self, sender=account, name='CFGSettingsObjectWasDeleted')
-            notification.center.post_notification('SIPAccountManagerDidAddAccount', sender=self, data=NotificationData(account=account))
+            notification.center.post_notification('SIPAccountManagerDidAddAccount', sender=self,
+                                                  data=NotificationData(account=account))
             from sipsimple.application import SIPApplication
             if SIPApplication.running:
                 call_in_green_thread(account.start)
@@ -854,7 +900,8 @@ class AccountManager(object, metaclass=Singleton):
         del self.accounts[account.id]
         notification.center.remove_observer(self, sender=account, name='CFGSettingsObjectDidChange')
         notification.center.remove_observer(self, sender=account, name='CFGSettingsObjectWasDeleted')
-        notification.center.post_notification('SIPAccountManagerDidRemoveAccount', sender=self, data=NotificationData(account=account))
+        notification.center.post_notification('SIPAccountManagerDidRemoveAccount', sender=self,
+                                              data=NotificationData(account=account))
 
     def _NH_CFGSettingsObjectDidChange(self, notification):
         account = notification.sender
@@ -866,7 +913,8 @@ class AccountManager(object, metaclass=Singleton):
                 self.default_account = account
             elif not account.enabled and self.default_account is account:
                 try:
-                    self.default_account = next((account for account in list(self.accounts.values()) if account.enabled))
+                    self.default_account = next(
+                        (account for account in list(self.accounts.values()) if account.enabled))
                 except StopIteration:
                     self.default_account = None
 
@@ -893,4 +941,5 @@ class AccountManager(object, metaclass=Singleton):
             # we need to post the notification in the file-io thread in order to have it serialized after the
             # SIPAccountManagerDidAddAccount notification that is triggered when the account is saved the first
             # time, because save is executed in the file-io thread while this runs in the current thread. -Dan
-            call_in_thread('file-io', notification_center.post_notification, 'SIPAccountManagerDidChangeDefaultAccount', sender=self, data=NotificationData(old_account=old_account, account=account))
+            call_in_thread('file-io', notification_center.post_notification, 'SIPAccountManagerDidChangeDefaultAccount',
+                           sender=self, data=NotificationData(old_account=old_account, account=account))

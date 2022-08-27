@@ -1,12 +1,14 @@
-
 """Generic configuration management"""
 
 __all__ = ['ConfigurationManager', 'ConfigurationError', 'ObjectNotFoundError', 'DuplicateIDError',
-           'SettingsObjectID', 'SettingsObjectImmutableID', 'AbstractSetting', 'Setting', 'CorrelatedSetting', 'RuntimeSetting',
-           'SettingsStateMeta', 'SettingsState', 'SettingsGroup', 'ItemCollection', 'SettingsObject', 'SettingsObjectExtension',
+           'SettingsObjectID', 'SettingsObjectImmutableID', 'AbstractSetting', 'Setting', 'CorrelatedSetting',
+           'RuntimeSetting',
+           'SettingsStateMeta', 'SettingsState', 'SettingsGroup', 'ItemCollection', 'SettingsObject',
+           'SettingsObjectExtension',
            'DefaultValue', 'ModifiedValue', 'ModifiedList', 'PersistentKey', 'ItemContainer', 'ItemManagement']
 
 from abc import ABCMeta, abstractmethod
+from functools import reduce
 from itertools import chain
 from operator import attrgetter
 from threading import Lock
@@ -19,13 +21,15 @@ from application.python.weakref import weakobjectmap
 
 from sipsimple import log
 from sipsimple.threading import run_in_thread
-from functools import reduce
 
 
 ## Exceptions
 
 class ConfigurationError(Exception): pass
+
+
 class ObjectNotFoundError(ConfigurationError): pass
+
 
 class DuplicateIDError(ValueError): pass
 
@@ -70,7 +74,8 @@ class ConfigurationManager(object, metaclass=Singleton):
             raise RuntimeError("SIPApplication.storage must be defined before starting the ConfigurationManager")
         backend = SIPApplication.storage.configuration_backend
         if not IConfigurationBackend.providedBy(backend):
-            raise TypeError("SIPApplication.storage.configuration_backend must implement the IConfigurationBackend interface")
+            raise TypeError(
+                "SIPApplication.storage.configuration_backend must implement the IConfigurationBackend interface")
         self.data = backend.load()
         self.backend = backend
 
@@ -251,7 +256,8 @@ class ModifiedList(object):
         self.modified = modified
 
     def __repr__(self):
-        return '%s(added=%r, removed=%r, modified=%r)' % (self.__class__.__name__, self.added, self.removed, self.modified)
+        return '%s(added=%r, removed=%r, modified=%r)' % (
+            self.__class__.__name__, self.added, self.removed, self.modified)
 
 
 class SettingsObjectID(object):
@@ -280,7 +286,9 @@ class SettingsObjectID(object):
                 self.dirty[obj] = False
                 return
             try:
-                other_obj = next((key for key, val in chain(iter(list(self.values.items())), iter(list(self.oldvalues.items()))) if val==value))
+                other_obj = next(
+                    (key for key, val in chain(iter(list(self.values.items())), iter(list(self.oldvalues.items()))) if
+                     val == value))
             except StopIteration:
                 pass
             else:
@@ -339,7 +347,7 @@ class SettingsObjectImmutableID(object):
             if not isinstance(value, self.type):
                 value = self.type(value)
             try:
-                other_obj = next((key for key, val in list(self.values.items()) if val==value))
+                other_obj = next((key for key, val in list(self.values.items()) if val == value))
             except StopIteration:
                 pass
             else:
@@ -425,7 +433,8 @@ class Setting(AbstractSetting):
             if obj in self.values and self.values[obj] == value:
                 return
             self.values[obj] = value
-            self.dirty[obj] = value != self.oldvalues.get(obj, DefaultValue)  # if value changes from implicit default (DefaultValue) to explicit default (self.default) we mark it as dirty
+            self.dirty[obj] = value != self.oldvalues.get(obj,
+                                                          DefaultValue)  # if value changes from implicit default (DefaultValue) to explicit default (self.default) we mark it as dirty
 
     def __getstate__(self, obj):
         value = self.values.get(obj, DefaultValue)
@@ -472,8 +481,10 @@ class Setting(AbstractSetting):
         """
         with self.lock:
             try:
-                if self.dirty.get(obj, False):  # if the object is dirty because it switched from implicit default to explicit default, ModifiedValue will have old==new==self.default (see __set__)
-                    return ModifiedValue(old=self.oldvalues.get(obj, self.default), new=self.values.get(obj, self.default))
+                if self.dirty.get(obj,
+                                  False):  # if the object is dirty because it switched from implicit default to explicit default, ModifiedValue will have old==new==self.default (see __set__)
+                    return ModifiedValue(old=self.oldvalues.get(obj, self.default),
+                                         new=self.values.get(obj, self.default))
                 else:
                     return None
             finally:
@@ -582,7 +593,7 @@ class SettingsState(object, metaclass=SettingsStateMeta):
             attribute = getattr(self.__class__, name, None)
             if isinstance(attribute, SettingsGroupMeta):
                 modified_settings = getattr(self, name).get_modified()
-                modified.update(dict((name+'.'+k if k else name, v) for k,v in list(modified_settings.items())))
+                modified.update(dict((name + '.' + k if k else name, v) for k, v in list(modified_settings.items())))
             elif isinstance(attribute, AbstractSetting):
                 modified_value = attribute.get_modified(self)
                 if modified_value is not None:
@@ -622,12 +633,16 @@ class SettingsState(object, metaclass=SettingsStateMeta):
                 try:
                     group.__setstate__(value)
                 except ValueError as e:
-                    notification_center.post_notification('CFGManagerLoadFailed', sender=configuration_manager, data=NotificationData(attribute=name, container=self, error=e))
+                    notification_center.post_notification('CFGManagerLoadFailed', sender=configuration_manager,
+                                                          data=NotificationData(attribute=name, container=self,
+                                                                                error=e))
             elif isinstance(attribute, AbstractSetting):
                 try:
                     attribute.__setstate__(self, value)
                 except ValueError as e:
-                    notification_center.post_notification('CFGManagerLoadFailed', sender=configuration_manager, data=NotificationData(attribute=name, container=self, error=e))
+                    notification_center.post_notification('CFGManagerLoadFailed', sender=configuration_manager,
+                                                          data=NotificationData(attribute=name, container=self,
+                                                                                error=e))
 
 
 class SettingsGroupMeta(SettingsStateMeta):
@@ -635,6 +650,7 @@ class SettingsGroupMeta(SettingsStateMeta):
     Metaclass for SettingsGroup and its subclasses which allows them to be used
     as descriptor instances.
     """
+
     def __init__(cls, name, bases, dct):
         super(SettingsGroupMeta, cls).__init__(name, bases, dct)
         cls.values = weakobjectmap()
@@ -679,9 +695,10 @@ class ItemMap(dict):
         old_ids = set(self.old)
         added_items = [self[id] for id in new_ids - old_ids]
         removed_items = [self.old[id] for id in old_ids - new_ids]
-        modified_items = dict((id, modified) for id, modified in ((id, self[id].get_modified()) for id in new_ids & old_ids) if modified)
+        modified_items = dict(
+            (id, modified) for id, modified in ((id, self[id].get_modified()) for id in new_ids & old_ids) if modified)
         for item in added_items:
-            item.get_modified() # reset the dirty flag of the added items and sync their old and new values
+            item.get_modified()  # reset the dirty flag of the added items and sync their old and new values
         if added_items or removed_items or modified_items:
             self.old = dict(self)
             return ModifiedList(added=added_items, removed=removed_items, modified=modified_items)
@@ -704,8 +721,10 @@ class ItemCollectionMeta(SettingsGroupMeta):
     def __init__(cls, name, bases, dct):
         if cls._item_type is not None and not issubclass(cls._item_type, SettingsState):
             raise TypeError('_item_type must be a subclass of SettingsState')
-        if cls._item_type is not None and not isinstance(getattr(cls._item_type, 'id', None), (SettingsObjectID, SettingsObjectImmutableID)):
-            raise ValueError('the type in _item_type must have an id attribute of type SettingsObjectID or SettingsObjectImmutableID')
+        if cls._item_type is not None and not isinstance(getattr(cls._item_type, 'id', None),
+                                                         (SettingsObjectID, SettingsObjectImmutableID)):
+            raise ValueError(
+                'the type in _item_type must have an id attribute of type SettingsObjectID or SettingsObjectImmutableID')
         if not isinstance(cls._item_management, ItemManagement):
             raise TypeError('_item_management must be an instance of a subclass of ItemManagement')
         super(ItemCollectionMeta, cls).__init__(name, bases, dct)
@@ -713,7 +732,9 @@ class ItemCollectionMeta(SettingsGroupMeta):
     def __set__(cls, obj, items):
         if not all(isinstance(item, cls._item_type) for item in items):
             raise TypeError("items must be instances of %s" % cls._item_type.__name__)
-        if set(item.id for item in items).intersection(name for name in dir(cls) if isinstance(getattr(cls, name, None), (SettingsGroupMeta, AbstractSetting))):
+        if set(item.id for item in items).intersection(name for name in dir(cls) if isinstance(getattr(cls, name, None),
+                                                                                               (SettingsGroupMeta,
+                                                                                                AbstractSetting))):
             raise ValueError("item IDs cannot overlap with static setting names")
         collection = cls.__get__(obj, obj.__class__)
         with collection._lock:
@@ -761,8 +782,11 @@ class ItemCollection(SettingsGroup, metaclass=ItemCollectionMeta):
     def __setstate__(self, state):
         with self._lock:
             super(ItemCollection, self).__setstate__(state)
-            setting_names = set(name for name in dir(self.__class__) if isinstance(getattr(self.__class__, name, None), (SettingsGroupMeta, AbstractSetting)))
-            self._item_map = ItemMap((id, self._item_type(id, **item_state)) for id, item_state in list(state.items()) if id not in setting_names)
+            setting_names = set(name for name in dir(self.__class__) if
+                                isinstance(getattr(self.__class__, name, None), (SettingsGroupMeta, AbstractSetting)))
+            self._item_map = ItemMap(
+                (id, self._item_type(id, **item_state)) for id, item_state in list(state.items()) if
+                id not in setting_names)
 
     def get_modified(self):
         with self._lock:
@@ -781,7 +805,8 @@ class ItemCollection(SettingsGroup, metaclass=ItemCollectionMeta):
     def add(self, item):
         if not isinstance(item, self._item_type):
             raise TypeError("item must be an instances of %s" % self._item_type.__name__)
-        if item.id in set(name for name in dir(self.__class__) if isinstance(getattr(self.__class__, name, None), (SettingsGroupMeta, AbstractSetting))):
+        if item.id in set(name for name in dir(self.__class__) if
+                          isinstance(getattr(self.__class__, name, None), (SettingsGroupMeta, AbstractSetting))):
             raise ValueError("item IDs cannot overlap with static setting names")
         with self._lock:
             self._item_management.add_item(item, self)
@@ -910,9 +935,10 @@ class SettingsObject(SettingsState, metaclass=SettingsObjectMeta):
         configuration = ConfigurationManager()
         notification_center = NotificationCenter()
 
-        oldkey = self.__oldkey__ # save this here as get_modified will reset it
+        oldkey = self.__oldkey__  # save this here as get_modified will reset it
 
-        modified_id = self.__class__.__id__.get_modified(self) if isinstance(self.__class__.__id__, SettingsObjectID) else None
+        modified_id = self.__class__.__id__.get_modified(self) if isinstance(self.__class__.__id__,
+                                                                             SettingsObjectID) else None
         modified_settings = self.get_modified()
 
         if not modified_id and not modified_settings and self.__state__ != 'new':
@@ -925,7 +951,8 @@ class SettingsObject(SettingsState, metaclass=SettingsObjectMeta):
             notification_center.post_notification('CFGSettingsObjectWasCreated', sender=self)
             modified_data = None
         elif not modified_id and all(isinstance(self.__settings__[key], RuntimeSetting) for key in modified_settings):
-            notification_center.post_notification('CFGSettingsObjectDidChange', sender=self, data=NotificationData(modified=modified_settings))
+            notification_center.post_notification('CFGSettingsObjectDidChange', sender=self,
+                                                  data=NotificationData(modified=modified_settings))
             return
         else:
             if modified_id:
@@ -935,13 +962,16 @@ class SettingsObject(SettingsState, metaclass=SettingsObjectMeta):
             modified_data = modified_settings or {}
             if modified_id:
                 modified_data['__id__'] = modified_id
-            notification_center.post_notification('CFGSettingsObjectDidChange', sender=self, data=NotificationData(modified=modified_data))
+            notification_center.post_notification('CFGSettingsObjectDidChange', sender=self,
+                                                  data=NotificationData(modified=modified_data))
 
         try:
             configuration.save()
         except Exception as e:
             log.exception()
-            notification_center.post_notification('CFGManagerSaveFailed', sender=configuration, data=NotificationData(object=self, operation='save', modified=modified_data, exception=e))
+            notification_center.post_notification('CFGManagerSaveFailed', sender=configuration,
+                                                  data=NotificationData(object=self, operation='save',
+                                                                        modified=modified_data, exception=e))
 
     @run_in_thread('file-io')
     def delete(self):
@@ -956,13 +986,14 @@ class SettingsObject(SettingsState, metaclass=SettingsObjectMeta):
 
         configuration = ConfigurationManager()
         notification_center = NotificationCenter()
-        configuration.delete(self.__oldkey__) # we need the key that wasn't yet saved
+        configuration.delete(self.__oldkey__)  # we need the key that wasn't yet saved
         notification_center.post_notification('CFGSettingsObjectWasDeleted', sender=self)
         try:
             configuration.save()
         except Exception as e:
             log.exception()
-            notification_center.post_notification('CFGManagerSaveFailed', sender=configuration, data=NotificationData(object=self, operation='delete', exception=e))
+            notification_center.post_notification('CFGManagerSaveFailed', sender=configuration,
+                                                  data=NotificationData(object=self, operation='delete', exception=e))
 
     def clone(self, new_id):
         """
@@ -990,7 +1021,6 @@ class SettingsObjectExtension(object):
     """
     Base class for extensions of SettingsObjects.
     """
+
     def __new__(self, *args, **kwargs):
         raise TypeError("SettingsObjectExtension subclasses cannot be instantiated")
-
-
