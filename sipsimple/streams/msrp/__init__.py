@@ -133,6 +133,57 @@ class MSRPStreamBase(object, metaclass=MediaStreamType):
             pass
         return reason
 
+    def _tls_diagnostics(self):
+        # Collect the TLS environment relevant for diagnosing certificate
+        # failures: wrapper and library versions, the CA list and certificate
+        # files in use, how many CAs were actually loaded and whether server
+        # verification is enabled. Returned as a string suitable for logging
+        # and attached to failure notifications as 'tls_info'.
+        info = []
+        try:
+            import gnutls
+            version = getattr(gnutls, '__version__', 'unknown')
+            try:
+                from gnutls.library.functions import gnutls_check_version
+                libversion = gnutls_check_version(None).decode()
+            except Exception:
+                libversion = 'unknown'
+            info.append('python-gnutls %s (libgnutls %s)' % (version, libversion))
+        except Exception:
+            pass
+        try:
+            settings = SIPSimpleSettings()
+            info.append('ca_list=%s' % (settings.tls.ca_list.normalized if settings.tls.ca_list else None))
+            info.append('certificate=%s' % (settings.tls.certificate.normalized if settings.tls.certificate else None))
+            info.append('verify_server=%s' % settings.tls.verify_server)
+        except Exception:
+            pass
+        try:
+            account = getattr(getattr(self, 'session', None), 'account', None)
+            if account is not None:
+                credentials = account.tls_credentials
+                info.append('trusted_cas=%d' % len(credentials.trusted))
+                if credentials.cert is not None:
+                    chain = getattr(credentials, 'chain', ())
+                    info.append('identity=%s (+%d chain certs)' % (credentials.cert.subject.CN, len(chain)))
+        except Exception:
+            pass
+        return ', '.join(info)
+
+    def _log_tls_failure(self, reason, tls_info):
+        # Send the full failure details to the MSRP log: they are too verbose
+        # for the user interface, which only gets the short reason, while the
+        # TLS environment details are needed for debugging. The notification
+        # is posted directly instead of going through NotificationProxyLogger,
+        # so that TLS failures are always logged, regardless of the MSRP
+        # tracing setting.
+        from application import log
+        try:
+            message = 'MSRP TLS failure: %s [%s]' % (reason, tls_info)
+            NotificationCenter().post_notification('MSRPLibraryLog', data=NotificationData(message=message, level=log.level.ERROR))
+        except Exception:
+            pass
+
     # The public API (the IMediaStream interface)
 
     # noinspection PyUnusedLocal
@@ -200,10 +251,12 @@ class MSRPStreamBase(object, metaclass=MediaStreamType):
             full_local_path = self.msrp_connector.prepare(local_uri=URI(host=host.default_ip, port=0, use_tls=self.transport=='tls', credentials=self.session.account.tls_credentials))
             self.local_media = self._create_local_media(full_local_path)
         except (CertificateError, CertificateAuthorityError, CertificateExpiredError, CertificateSecurityError, CertificateRevokedError) as e:
-            reason = "%s for CN %s issued by %s" % (e.error, e.certificate.subject.CN, e.certificate.issuer.CN)
-            notification_center.post_notification('MediaStreamDidNotInitialize', sender=self, data=NotificationData(reason=self._annotate_init_failure(reason), transport=self.transport, credentials=self.session.account.tls_credentials))
+            tls_info = self._tls_diagnostics()
+            reason = self._annotate_init_failure("%s for CN %s issued by %s" % (e.error, e.certificate.subject.CN, e.certificate.issuer.CN))
+            self._log_tls_failure(reason, tls_info)
+            notification_center.post_notification('MediaStreamDidNotInitialize', sender=self, data=NotificationData(reason=reason, transport=self.transport, credentials=self.session.account.tls_credentials, tls_info=tls_info))
         except Exception as e:
-            notification_center.post_notification('MediaStreamDidNotInitialize', sender=self, data=NotificationData(reason=self._annotate_init_failure(str(e)), transport=self.transport, credentials=self.session.account.tls_credentials))
+            notification_center.post_notification('MediaStreamDidNotInitialize', sender=self, data=NotificationData(reason=self._annotate_init_failure(str(e)), transport=self.transport, credentials=self.session.account.tls_credentials, tls_info=self._tls_diagnostics()))
         else:
             notification_center.post_notification('MediaStreamDidInitialize', sender=self)
         finally:
@@ -248,12 +301,18 @@ class MSRPStreamBase(object, metaclass=MediaStreamType):
             self.msrp_connector = None
         except (CertificateAuthorityError, CertificateError, CertificateRevokedError) as e:
             peer = '%s:%s' % (full_remote_path[0].host, full_remote_path[0].port)
-            self._failure_reason = "%s - %s" % (peer, e.error)
-            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context=context, reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials))
+            tls_info = self._tls_diagnostics()
+            try:
+                peer_cert_info = ' for CN %s issued by %s' % (e.certificate.subject.CN, e.certificate.issuer.CN)
+            except Exception:
+                peer_cert_info = ''
+            self._failure_reason = "%s - %s%s" % (peer, e.error, peer_cert_info)
+            self._log_tls_failure(self._failure_reason, tls_info)
+            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context=context, reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials, tls_info=tls_info))
         except Exception as e:
             #traceback.print_exc()
             self._failure_reason = str(e)
-            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context=context, reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials))
+            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context=context, reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials, tls_info=self._tls_diagnostics()))
         else:
             notification_center.post_notification('MediaStreamDidStart', sender=self)
         finally:
@@ -334,7 +393,7 @@ class MSRPStreamBase(object, metaclass=MediaStreamType):
             if self.shutting_down and isinstance(error.value, ConnectionDone):
                 return
             self._failure_reason = error.getErrorMessage()
-            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context='reading', reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials))
+            notification_center.post_notification('MediaStreamDidFail', sender=self, data=NotificationData(context='reading', reason=self._failure_reason, transport=self.transport, credentials=self.session.account.tls_credentials, tls_info=self._tls_diagnostics()))
         elif chunk is not None:
             method_handler = getattr(self, '_handle_%s' % chunk.method, None)
             if method_handler is not None:
