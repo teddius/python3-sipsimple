@@ -10,6 +10,7 @@ from threading import Lock
 
 from application.notification import IObserver, NotificationCenter, NotificationData
 from application.python import Null
+from application.python.decorator import execute_once
 from application.python.descriptor import classproperty
 from application.python.types import Singleton
 from application.system import host as Host
@@ -39,7 +40,7 @@ from sipsimple.payloads.rlsnotify import RLSNotify
 from sipsimple.payloads.watcherinfo import WatcherInfoDocument
 from sipsimple.threading import call_in_thread
 from sipsimple.threading.green import call_in_green_thread, run_in_green_thread
-from sipsimple.util import user_info, execute_once
+from sipsimple.util import user_info
 
 
 class AuthSettings(SettingsGroup):
@@ -160,12 +161,12 @@ class Account(SettingsObject):
         self._registrar = Registrar(self)
         self._mwi_subscriber = MWISubscriber(self)
         self._pwi_subscriber = PresenceWinfoSubscriber(self)
-        self._dwi_subscriber = DialogWinfoSubscriber(self)
         self._presence_subscriber = PresenceSubscriber(self)
         self._self_presence_subscriber = SelfPresenceSubscriber(self)
-        self._dialog_subscriber = DialogSubscriber(self)
         self._presence_publisher = PresencePublisher(self)
-        self._dialog_publisher = DialogPublisher(self)
+        #self._dwi_subscriber = DialogWinfoSubscriber(self)
+        #self._dialog_publisher = DialogPublisher(self)
+        #self._dialog_subscriber = DialogSubscriber(self)
         self._mwi_voicemail_uri = None
         self._pwi_version = None
         self._dwi_version = None
@@ -189,10 +190,10 @@ class Account(SettingsObject):
                                          sender=self.xcap_manager)
         notification_center.add_observer(self, sender=self._mwi_subscriber)
         notification_center.add_observer(self, sender=self._pwi_subscriber)
-        notification_center.add_observer(self, sender=self._dwi_subscriber)
         notification_center.add_observer(self, sender=self._presence_subscriber)
         notification_center.add_observer(self, sender=self._self_presence_subscriber)
-        notification_center.add_observer(self, sender=self._dialog_subscriber)
+        #notification_center.add_observer(self, sender=self._dialog_subscriber)
+        #notification_center.add_observer(self, sender=self._dwi_subscriber)
 
         self.xcap_manager.init()
         if self.enabled:
@@ -213,10 +214,10 @@ class Account(SettingsObject):
                                             sender=self.xcap_manager)
         notification_center.remove_observer(self, sender=self._mwi_subscriber)
         notification_center.remove_observer(self, sender=self._pwi_subscriber)
-        notification_center.remove_observer(self, sender=self._dwi_subscriber)
         notification_center.remove_observer(self, sender=self._presence_subscriber)
         notification_center.remove_observer(self, sender=self._self_presence_subscriber)
-        notification_center.remove_observer(self, sender=self._dialog_subscriber)
+        #notification_center.remove_observer(self, sender=self._dialog_subscriber)
+        #notification_center.remove_observer(self, sender=self._dwi_subscriber)
 
     @run_in_green_thread
     def delete(self):
@@ -227,12 +228,12 @@ class Account(SettingsObject):
         self._registrar = None
         self._mwi_subscriber = None
         self._pwi_subscriber = None
-        self._dwi_subscriber = None
         self._presence_subscriber = None
         self._self_presence_subscriber = None
-        self._dialog_subscriber = None
         self._presence_publisher = None
-        self._dialog_publisher = None
+        #self._dwi_subscriber = None
+        #self._dialog_subscriber = None
+        #self._dialog_publisher = None
         self.xcap_manager = None
         SettingsObject.delete(self)
 
@@ -246,10 +247,10 @@ class Account(SettingsObject):
         if self._started:
             self._mwi_subscriber.resubscribe()
             self._pwi_subscriber.resubscribe()
-            self._dwi_subscriber.resubscribe()
             self._presence_subscriber.resubscribe()
             self._self_presence_subscriber.resubscribe()
-            self._dialog_subscriber.resubscribe()
+            #self._dialog_subscriber.resubscribe()
+            #self._dwi_subscriber.resubscribe()
 
     @property
     def credentials(self):
@@ -285,8 +286,14 @@ class Account(SettingsObject):
 
         if tls_certificate is not None:
             try:
-                certificate_data = open(tls_certificate.normalized).read()
-                certificate = X509Certificate(certificate_data)
+                # use an explicit encoding: when running inside an application
+                # bundle without locale environment variables Python falls back
+                # to ASCII, which fails on PEM files with non-ASCII comments
+                certificate_data = open(tls_certificate.normalized, encoding='utf-8', errors='replace').read()
+                # load all certificates in the file (leaf first, followed by any
+                # intermediate CA certificates), so that the full chain is
+                # presented to the peer during the TLS handshake
+                certificate = X509Certificate.list_from_pem(certificate_data) or None
                 private_key = X509PrivateKey(certificate_data)
             except (FileNotFoundError, GNUTLSError, UnicodeDecodeError):
                 pass
@@ -301,7 +308,13 @@ class Account(SettingsObject):
                 crt = None
                 start = False
                 try:
-                    ca_text = open(ca_list.normalized).read()
+                    # use an explicit encoding: when running inside an application
+                    # bundle without locale environment variables Python falls back
+                    # to ASCII, which fails on CA bundles with non-ASCII comments
+                    # (e.g. the Mozilla bundle) and silently resulted in an empty
+                    # trust list, making all peer verifications fail with
+                    # 'peer certificate signer not found'
+                    ca_text = open(ca_list.normalized, encoding='utf-8', errors='replace').read()
                 except (FileNotFoundError, GNUTLSError, UnicodeDecodeError):
                     ca_text = ''
 
@@ -539,15 +552,15 @@ class Account(SettingsObject):
             self._registrar.start()
             self._mwi_subscriber.start()
             self._pwi_subscriber.start()
-            self._dwi_subscriber.start()
             self._presence_subscriber.start()
             self._self_presence_subscriber.start()
-            self._dialog_subscriber.start()
             self._presence_publisher.start()
-            self._dialog_publisher.start()
             if self.xcap.enabled:
                 self.xcap_manager.start()
             notification_center.post_notification('SIPAccountDidActivate', sender=self)
+            #self._dialog_publisher.start()
+            #self._dialog_subscriber.start()
+            #self._dwi_subscriber.start()
 
     def _deactivate(self):
         with self._activation_lock:
@@ -556,9 +569,12 @@ class Account(SettingsObject):
             notification_center = NotificationCenter()
             notification_center.post_notification('SIPAccountWillDeactivate', sender=self)
             self._active = False
-            handlers = [self._registrar, self._mwi_subscriber, self._pwi_subscriber, self._dwi_subscriber,
-                        self._presence_subscriber, self._self_presence_subscriber, self._dialog_subscriber,
-                        self._presence_publisher, self._dialog_publisher, self.xcap_manager]
+            #handlers = [self._registrar, self._mwi_subscriber, self._pwi_subscriber, self._dwi_subscriber,
+            #            self._presence_subscriber, self._self_presence_subscriber, self._dialog_subscriber,
+            #            self._presence_publisher, self._dialog_publisher, self.xcap_manager]
+            handlers = [self._registrar, self._mwi_subscriber, self._pwi_subscriber,
+                        self._presence_subscriber, self._self_presence_subscriber,
+                        self._presence_publisher, self.xcap_manager]
             proc.waitall([proc.spawn(handler.stop) for handler in handlers])
             notification_center.post_notification('SIPAccountDidDeactivate', sender=self)
 
@@ -700,8 +716,8 @@ class BonjourAccount(SettingsObject):
         settings = SIPSimpleSettings()
         tls_certificate = settings.tls.certificate
         if tls_certificate is not None:
-            certificate_data = open(tls_certificate.normalized).read()
-            certificate = X509Certificate(certificate_data)
+            certificate_data = open(tls_certificate.normalized, encoding='utf-8', errors='replace').read()
+            certificate = X509Certificate.list_from_pem(certificate_data) or None
             private_key = X509PrivateKey(certificate_data)
         else:
             certificate = None

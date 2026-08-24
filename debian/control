@@ -6,19 +6,21 @@ Uploaders: Tijmen de Mes <tijmen@ag-projects.com>
 Build-Depends: debhelper (>= 11), python3,
                dh-python,
                python3-all-dev,
-               cython3,
+               cython3 | cython3-legacy,
                libasound2-dev,
+               python3-dateutil,
+               python3-dnspython,
                libssl-dev,
                libv4l-dev,
                libavcodec-dev,
                libavformat-dev,
-               libopencore-amrnb-dev,
-               libopencore-amrwb-dev,
                libavutil-dev,
                libswscale-dev,
-               libx264-dev,
+               libopencore-amrnb-dev,
+               libopencore-amrwb-dev,
                libvpx-dev,
                libopus-dev,
+               libbcg729-dev,
                libsqlite3-dev,
                pkg-config,
                uuid-dev
@@ -28,18 +30,17 @@ Homepage: https://sipsimpleclient.org
 Package: python3-sipsimple
 Architecture: any
 Depends: ${python3:Depends}, ${shlibs:Depends}, ${misc:Depends},
-         python3-application,
+         python3-application (>= 3.0.11),
          python3-dateutil,
          python3-dnspython,
          python3-eventlib,
          python3-gevent,
-         python3-gnutls,
+         python3-gnutls (>= 3.1.13),
          python3-lxml,
          python3-msrplib,
-         python3-otr,
          python3-twisted,
          python3-xcaplib
-Suggests: libavahi-compat-libdnssd1
+Suggests: libavahi-compat-libdnssd1, python3-otr
 Provides: ${python3:Provides}
 Description: SIP SIMPLE SDK is a Python library for desktop operating
  systems designed for the development of real time communications
